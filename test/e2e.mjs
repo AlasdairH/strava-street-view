@@ -82,6 +82,7 @@ const GL_PAGE = `<!doctype html><meta charset=utf-8><title>Route builder</title>
     const ll = map.unproject([x - r.left, y - r.top]);
     return { lat: ll.lat, lng: ll.lng, bearing: map.getBearing() };
   };
+  window.__bearing = () => map.getBearing();
   window.__ready = true;
 })();
 <\/script>`;
@@ -178,6 +179,60 @@ await page.waitForTimeout(300);
 check('setting off restores page behaviour', (await page.evaluate(() => window.__prevented)) === true,
   `defaultPrevented=${await page.evaluate(() => window.__prevented)}`);
 await worker.evaluate(() => chrome.storage.sync.set({ forceContextMenu: true }));
+
+/* ---------------- Test 1c: a shaky right-click must not rotate -------------- */
+
+// The reported bug: pressing the right button and moving even slightly starts
+// MapLibre's drag-to-rotate, which eats the click. On Windows the browser then
+// cancels the context menu outright, so there is no event left to rescue.
+async function rightPressDrag(x, y, dx, dy) {
+  await page.mouse.move(x, y);
+  await page.mouse.down({ button: 'right' });
+  await page.mouse.move(x + dx, y + dy, { steps: 4 });
+  await page.mouse.up({ button: 'right' });
+}
+
+const bearingBefore = await page.evaluate(() => window.__bearing());
+await rightPressDrag(400, 300, 60, 0);
+await page.waitForTimeout(300);
+const bearingAfter = await page.evaluate(() => window.__bearing());
+check('right-drag no longer rotates the map', Math.abs(bearingAfter - bearingBefore) < 1e-6,
+  `bearing ${bearingBefore} -> ${bearingAfter}`);
+
+// The coordinate must still be reported for a click that wobbled.
+const wobbled = await (async () => {
+  await worker.evaluate(() => chrome.storage.session.clear());
+  await rightPressDrag(350, 320, 3, 2);
+  await page.waitForTimeout(400);
+  const all = await worker.evaluate(() => chrome.storage.session.get(null));
+  return Object.values(all)[0] || null;
+})();
+check('wobbled right-click still reports coords', wobbled && wobbled.ok === true, JSON.stringify(wobbled));
+
+// Negative control: with the setting off the map must rotate again, proving the
+// check above is testing the fix rather than a map that never rotates.
+await worker.evaluate(() => chrome.storage.sync.set({ blockRightDragRotate: false }));
+await page.waitForTimeout(300);
+const controlBefore = await page.evaluate(() => window.__bearing());
+await rightPressDrag(400, 300, 60, 0);
+await page.waitForTimeout(300);
+const controlAfter = await page.evaluate(() => window.__bearing());
+check('setting off restores right-drag rotation', Math.abs(controlAfter - controlBefore) > 1,
+  `bearing ${controlBefore} -> ${controlAfter}`);
+await worker.evaluate(() => chrome.storage.sync.set({ blockRightDragRotate: true }));
+await page.waitForTimeout(300);
+
+// Ctrl+left-drag is MapLibre's other rotate binding and must still work.
+const ctrlBefore = await page.evaluate(() => window.__bearing());
+await page.keyboard.down('Control');
+await page.mouse.move(400, 300);
+await page.mouse.down();
+await page.mouse.move(470, 300, { steps: 4 });
+await page.mouse.up();
+await page.keyboard.up('Control');
+await page.waitForTimeout(300);
+const ctrlAfter = await page.evaluate(() => window.__bearing());
+check('ctrl+left-drag still rotates', Math.abs(ctrlAfter - ctrlBefore) > 1, `bearing ${ctrlBefore} -> ${ctrlAfter}`);
 
 /* ---------------- Test 2: DOM tile fallback --------------------------------- */
 

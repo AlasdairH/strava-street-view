@@ -19,7 +19,7 @@
   const PAGE_SOURCE = 'strava-street-view:page';
   const CONTENT_SOURCE = 'strava-street-view:content';
 
-  const config = { forceContextMenu: true };
+  const config = { forceContextMenu: true, blockRightDragRotate: true };
 
   // Containers created by MapLibre/Mapbox GL and Leaflet respectively. The
   // canvas-container variants are listed because the right-click target inside a
@@ -267,23 +267,54 @@
     return null;
   }
 
+  // Makes any later preventDefault() call on this one event a no-op. The
+  // listeners still run; they just cannot cancel the browser's default action.
+  function neuterPreventDefault(event) {
+    try {
+      Object.defineProperty(event, 'preventDefault', {
+        configurable: true,
+        writable: true,
+        value: () => {}
+      });
+    } catch { /* ignore */ }
+  }
+
+  // Right-button mousedown is how MapLibre starts its drag-to-rotate gesture,
+  // and it is also what the browser turns into a context menu. Two problems
+  // follow, and both are fixed by keeping the press away from the map:
+  //
+  //  - the gesture wins on the slightest hand movement, so the map spins
+  //    instead of opening a menu;
+  //  - on Windows the menu is generated on mouse *up*, and a right-button drag
+  //    cancels it outright, so there is no contextmenu event left to rescue.
+  //
+  // Rotating with Ctrl + left-drag is untouched -- MapLibre binds that too.
+  function onMouseDown(event) {
+    if (event.button !== 2 || !config.blockRightDragRotate) return;
+    if (!mapContainerAt(event)) return;
+    neuterPreventDefault(event);
+    event.stopPropagation();
+  }
+
+  // A cancelled right-button mouseup suppresses the menu on Windows just as a
+  // cancelled mousedown does, so this one is defended too -- but only the
+  // cancelling is blocked, never the delivery.
+  function onMouseUp(event) {
+    if (event.button !== 2 || !config.forceContextMenu) return;
+    if (!mapContainerAt(event)) return;
+    neuterPreventDefault(event);
+  }
+
   function onContextMenu(event) {
     const container = mapContainerAt(event);
     if (!container) return;
 
-    // MapLibre/Mapbox suppress the native menu whenever the page listens for
-    // their own `contextmenu` event -- which Strava does. Neutering
-    // preventDefault for this one event is what makes the extension's menu
+    // Every MapLibre/Mapbox drag handler installs its own
+    // `contextmenu -> preventDefault()`, and MapEventHandler adds another
+    // whenever the page listens for the map's contextmenu event -- which
+    // Strava does. Neutering preventDefault is what makes the extension's menu
     // item reachable at all.
-    if (config.forceContextMenu) {
-      try {
-        Object.defineProperty(event, 'preventDefault', {
-          configurable: true,
-          writable: true,
-          value: () => {}
-        });
-      } catch { /* ignore */ }
-    }
+    if (config.forceContextMenu) neuterPreventDefault(event);
 
     let payload = { ok: false, reason: 'no-map' };
     try {
@@ -302,6 +333,8 @@
     );
   }
 
+  window.addEventListener('mousedown', onMouseDown, true);
+  window.addEventListener('mouseup', onMouseUp, true);
   window.addEventListener('contextmenu', onContextMenu, true);
 
   /* ------------------------------------------------------------------ *
@@ -365,6 +398,9 @@
     if (event.source !== window) return;
     const data = event.data;
     if (!data || data.source !== CONTENT_SOURCE || data.kind !== 'config') return;
-    if (typeof data.forceContextMenu === 'boolean') config.forceContextMenu = data.forceContextMenu;
+    if (!data.values || typeof data.values !== 'object') return;
+    for (const key of Object.keys(config)) {
+      if (typeof data.values[key] === 'boolean') config[key] = data.values[key];
+    }
   });
 })();

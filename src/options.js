@@ -2,6 +2,7 @@
 
 const DEFAULTS = {
   forceContextMenu: true,
+  blockRightDragRotate: true,
   showGoogleMapsItem: true,
   showCopyItem: true,
   useHeading: true,

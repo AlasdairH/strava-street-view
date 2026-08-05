@@ -56,13 +56,23 @@ are all handled correctly rather than approximated.
 inverts Web Mercator directly from a tile's URL coordinates and its measured
 on-screen rectangle, needing nothing from the page's JavaScript at all.
 
-**Keeping the menu alive.** MapLibre and Mapbox call `preventDefault()` on
-`contextmenu` whenever the page listens for their own contextmenu event — which
-Strava does — and that suppresses the browser menu, extension items included.
-The bridge registers a capture-phase listener at `document_start`, so it runs
-first, and neutralises `preventDefault` for that one event when the click is
-over a map. This is the *Force the browser menu over maps* setting; turning it
-off restores Strava's behaviour exactly, at the cost of the menu items.
+**Keeping the menu alive.** Two separate things on Strava's map eat a
+right-click, and both have to be handled.
+
+The first is `preventDefault()` on `contextmenu`: every MapLibre drag handler
+installs one, and `MapEventHandler` adds another whenever the page listens for
+the map's own contextmenu event — which Strava does. The bridge registers a
+capture-phase listener at `document_start`, so it runs before any of them, and
+neutralises `preventDefault` for that one event when the click is over a map.
+That is the *Force the browser menu over maps* setting.
+
+The second is the gesture. MapLibre binds drag-to-rotate to right-button
+mousedown with a 1px tolerance, so the map spins on the slightest hand movement
+instead of opening a menu — and on Windows, where the browser generates the
+menu on mouse *up*, a right-button drag cancels it outright, leaving no
+`contextmenu` event to rescue. The bridge therefore stops right-button mousedown
+from reaching the map at all, which is the *Stop right-drag from rotating the
+map* setting. Ctrl + left-drag, MapLibre's other rotate binding, is untouched.
 
 **Handing over the coordinate.** `chrome.contextMenus.onClicked` reports which
 item was clicked but not where the click happened, so the coordinate is captured
@@ -80,6 +90,7 @@ options**):
 | Show *Copy coordinates* | on | Adds an item that copies `lat, lng` |
 | Match the map's rotation | on | Passes the map bearing as the Street View `heading` |
 | Open in a background tab | off | Keeps focus on the route builder |
+| Stop right-drag from rotating the map | on | Otherwise the rotate gesture swallows the right-click. Ctrl + left-drag still rotates |
 | Force the browser menu over maps | on | See above — without it the items usually never appear |
 
 ## Development
@@ -95,8 +106,11 @@ origin, with MapLibre deliberately wrapped so it never touches
 `window.maplibregl` and the map instance reachable only through a React fiber —
 the same shape Strava ships. It then asserts that a right-click reports the same
 coordinate `map.unproject()` does, on a rotated map in an offset container, that
-the native menu survives MapLibre's `preventDefault()`, and that the tile
-fallback inverts Web Mercator correctly.
+the native menu survives MapLibre's `preventDefault()`, that a right-click which
+wobbles a few pixels neither rotates the map nor loses its coordinate, that
+Ctrl + left-drag still rotates, and that the tile fallback inverts Web Mercator
+correctly. Both suppression settings have negative controls, so turning them off
+provably restores Strava's original behaviour.
 
 No build step: the source is what gets loaded.
 
@@ -113,6 +127,9 @@ coordinate in the URL.
 
 ## Limitations
 
+- Rotating the map by right-dragging is disabled by default, because that
+  gesture and a right-click are the same input. Use Ctrl + left-drag, or turn
+  the setting off if you would rather keep the gesture than the menu.
 - Strava is free to change its map stack; if the instance can never be found,
   the menu item reports that instead of guessing at a position.
 - Street View only exists where Google has driven. Google falls back to the map

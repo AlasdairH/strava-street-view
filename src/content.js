@@ -232,18 +232,24 @@
    * Config relay to the page world
    * ------------------------------------------------------------------ */
 
-  function pushConfig(forceContextMenu) {
-    window.postMessage({ source: CONTENT_SOURCE, kind: 'config', forceContextMenu }, targetOrigin);
+  // Settings the page world acts on. The rest never leave the service worker.
+  const PAGE_SETTINGS = { forceContextMenu: true, blockRightDragRotate: true };
+
+  function pushConfig(values) {
+    window.postMessage({ source: CONTENT_SOURCE, kind: 'config', values }, targetOrigin);
   }
 
-  chrome.storage.sync.get({ forceContextMenu: true }, (values) => {
+  chrome.storage.sync.get(PAGE_SETTINGS, (values) => {
     if (chrome.runtime.lastError) return;
-    pushConfig(values.forceContextMenu);
+    pushConfig(values);
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'sync' && changes.forceContextMenu) {
-      pushConfig(changes.forceContextMenu.newValue);
+    if (area !== 'sync') return;
+    const values = {};
+    for (const key of Object.keys(PAGE_SETTINGS)) {
+      if (changes[key]) values[key] = changes[key].newValue;
     }
+    if (Object.keys(values).length > 0) pushConfig(values);
   });
 })();
