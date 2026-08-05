@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "Street View for Strava Route Builder",
+  "version": "1.0.0",
+  "description": "Right-click any road on a Strava map to open that exact spot in Google Street View.",
+  "minimum_chrome_version": "111",
+  "permissions": ["contextMenus", "storage"],
+  "host_permissions": ["https://www.strava.com/*"],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.strava.com/*"],
+      "js": ["src/page-bridge.js"],
+      "world": "MAIN",
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": ["https://www.strava.com/*"],
+      "js": ["src/content.js"],
+      "world": "ISOLATED",
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "options_ui": {
+    "page": "src/options.html",
+    "open_in_tab": false
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
