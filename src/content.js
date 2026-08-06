@@ -14,6 +14,8 @@
 
   const PAGE_SOURCE = 'strava-street-view:page';
   const CONTENT_SOURCE = 'strava-street-view:content';
+  const COORDS_ATTR = 'data-ssv-coords';
+  const READY_ATTR = 'data-ssv-bridge';
 
   const targetOrigin = location.origin && location.origin.startsWith('http') ? location.origin : '*';
 
@@ -25,6 +27,45 @@
     if (!data || data.source !== PAGE_SOURCE || data.kind !== 'coords') return;
     latestFromPage = data;
   });
+
+  /* ------------------------------------------------------------------ *
+   * Making sure the page bridge is actually running
+   * ------------------------------------------------------------------ */
+
+  // A MAIN-world content script is registered in the manifest, but that
+  // registration is the one part of this extension we cannot verify from here
+  // -- a strict page CSP or an injection failure leaves it silently absent, and
+  // every symptom then looks like "the map was not recognised". So: check for
+  // its marker, and inject the same file from the extension's own origin if the
+  // marker never appears.
+  let injected = false;
+
+  function bridgeReady() {
+    try {
+      return document.documentElement.hasAttribute(READY_ATTR);
+    } catch {
+      return false;
+    }
+  }
+
+  function injectBridge() {
+    if (injected || bridgeReady()) return;
+    injected = true;
+    try {
+      const script = document.createElement('script');
+      script.src = chrome.runtime.getURL('src/page-bridge.js');
+      script.async = false;
+      script.onload = () => script.remove();
+      (document.head || document.documentElement).appendChild(script);
+    } catch { /* extension context invalidated */ }
+  }
+
+  // Give the manifest registration a moment first; it runs at document_start,
+  // so anything later than this is not coming.
+  setTimeout(injectBridge, 500);
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', injectBridge, { once: true });
+  }
 
   /* ------------------------------------------------------------------ *
    * Fallback: read the projection straight off the tile images
@@ -90,7 +131,7 @@
 
     const lng = (worldX / parsed.span) * 360 - 180;
     const n = Math.PI - (2 * Math.PI * worldY) / parsed.span;
-    const lat = (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+    const lat = (180 / Math.PI) * (Math.atan(0.5 * (Math.exp(n) - Math.exp(-n))));
 
     if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90) return null;
     return { ok: true, lat, lng, bearing: 0, zoom: parsed.z, engine: 'tiles' };
@@ -107,45 +148,89 @@
     } catch { /* context invalidated */ }
   }
 
+  function report(result) {
+    if (result && result.ok) {
+      send({
+        type: 'ssv:coords',
+        ok: true,
+        lat: result.lat,
+        lng: result.lng,
+        bearing: result.bearing,
+        zoom: result.zoom,
+        engine: result.engine
+      });
+    } else {
+      send({
+        type: 'ssv:coords',
+        ok: false,
+        reason: (result && result.reason) || (bridgeReady() ? 'not-a-map' : 'no-bridge')
+      });
+    }
+  }
+
+  // The page bridge publishes through the shared DOM as well as postMessage,
+  // because the two worlds' tasks are not ordered against each other and a
+  // postMessage can land after this handler's timer has already fired.
+  function readFromPage(since) {
+    let fromAttribute = null;
+    try {
+      const raw = document.documentElement.getAttribute(COORDS_ATTR);
+      if (raw) fromAttribute = JSON.parse(raw);
+    } catch { /* ignore */ }
+
+    let best = null;
+    for (const record of [fromAttribute, latestFromPage]) {
+      if (!record || typeof record.ts !== 'number' || record.ts < since) continue;
+      if (!best || record.ts > best.ts) best = record;
+    }
+    return best;
+  }
+
+  const POLL_WINDOW_MS = 400;
+  const POLL_INTERVAL_MS = 12;
+  // The bridge publishes synchronously inside the same contextmenu dispatch, so
+  // its timestamp can sit fractionally either side of ours depending on which
+  // world's listener ran first.
+  const CLOCK_SLACK_MS = 50;
+
   window.addEventListener(
     'contextmenu',
     (event) => {
       const at = performance.now();
       const x = event.clientX;
       const y = event.clientY;
+      const deadline = at + POLL_WINDOW_MS;
+      let reported = false;
 
-      // page-bridge.js posts its result asynchronously, so yield once and let it
-      // land. The menu item is not clicked for at least a few hundred ms, which
-      // leaves plenty of room.
-      setTimeout(() => {
-        let result = null;
-        if (latestFromPage && latestFromPage.ts >= at - 1 && latestFromPage.ok) {
-          result = latestFromPage;
-        }
-        if (!result) {
-          try {
-            result = coordsFromTiles(x, y);
-          } catch { /* ignore */ }
+      // Anything we have is sent immediately and overwritten if something
+      // better arrives, so a fast menu click still finds a coordinate waiting.
+      const publish = (result) => {
+        reported = true;
+        report(result);
+      };
+
+      const poll = () => {
+        const fromPage = readFromPage(at - CLOCK_SLACK_MS);
+        if (fromPage && fromPage.ok) {
+          publish(fromPage);
+          return;
         }
 
-        if (result && result.ok) {
-          send({
-            type: 'ssv:coords',
-            ok: true,
-            lat: result.lat,
-            lng: result.lng,
-            bearing: result.bearing,
-            zoom: result.zoom,
-            engine: result.engine
-          });
-        } else {
-          send({
-            type: 'ssv:coords',
-            ok: false,
-            reason: (latestFromPage && latestFromPage.reason) || 'not-a-map'
-          });
+        let tiles = null;
+        try {
+          tiles = coordsFromTiles(x, y);
+        } catch { /* ignore */ }
+        if (tiles) {
+          publish(tiles);
+          return;
         }
-      }, 0);
+
+        if (!reported) publish(fromPage);
+
+        if (performance.now() < deadline) setTimeout(poll, POLL_INTERVAL_MS);
+      };
+
+      poll();
     },
     true
   );
@@ -235,13 +320,19 @@
   // Settings the page world acts on. The rest never leave the service worker.
   const PAGE_SETTINGS = { forceContextMenu: true, blockRightDragRotate: true };
 
+  let lastConfig = null;
+
   function pushConfig(values) {
-    window.postMessage({ source: CONTENT_SOURCE, kind: 'config', values }, targetOrigin);
+    lastConfig = { ...(lastConfig || {}), ...values };
+    window.postMessage({ source: CONTENT_SOURCE, kind: 'config', values: lastConfig }, targetOrigin);
   }
 
   chrome.storage.sync.get(PAGE_SETTINGS, (values) => {
     if (chrome.runtime.lastError) return;
     pushConfig(values);
+    // A bridge injected after this point missed the message, so repeat it once
+    // the late-injection path has had its chance to run.
+    setTimeout(() => pushConfig(values), 1200);
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {

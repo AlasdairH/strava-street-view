@@ -148,6 +148,23 @@ function notify(tabId, text) {
   chrome.tabs.sendMessage(tabId, { type: 'ssv:toast', text }).catch(() => {});
 }
 
+// Each reason points at a different thing to try, so they get different words.
+// `no-map-object` in particular means the click landed on a map but the
+// instance behind it could not be reached -- worth saying out loud, because it
+// is the one case where reloading genuinely helps.
+function explain(reason) {
+  switch (reason) {
+    case 'not-a-map':
+      return 'Right-click directly on the map to use this.';
+    case 'no-map-object':
+      return 'Found the map but could not read its position — reload the page and try again.';
+    case 'no-bridge':
+      return 'Could not attach to this page — reload it and try again.';
+    default:
+      return 'Could not read the map position — try again, or reload the page.';
+  }
+}
+
 /* -------------------------------------------------------------------- *
  * Menu clicks
  * -------------------------------------------------------------------- */
@@ -159,12 +176,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const coords = await recallCoords(tab.id);
 
   if (!coords || !coords.ok) {
-    notify(
-      tab.id,
-      coords && coords.reason === 'not-a-map'
-        ? 'Right-click directly on the map to use this.'
-        : 'Could not read the map position — try again, or reload the page.'
-    );
+    notify(tab.id, explain(coords && coords.reason));
     return;
   }
 
