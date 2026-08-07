@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Street View for Strava — Options</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <h1>Street View for Strava</h1>
+    <p class="lede">
+      Right-click a road on any Strava map and pick <strong>Open Street View here</strong>.
+    </p>
+
+    <form id="settings">
+      <fieldset>
+        <legend>Menu items</legend>
+
+        <label>
+          <input type="checkbox" name="showGoogleMapsItem" />
+          <span>
+            Show <em>Open Google Maps here</em>
+            <small>Opens the pin on the regular map instead of Street View.</small>
+          </span>
+        </label>
+
+        <label>
+          <input type="checkbox" name="showCopyItem" />
+          <span>
+            Show <em>Copy coordinates</em>
+            <small>Copies <code>lat, lng</code> to the clipboard.</small>
+          </span>
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Behaviour</legend>
+
+        <label>
+          <input type="checkbox" name="useHeading" />
+          <span>
+            Match the map's rotation
+            <small>Points the Street View camera the same way the Strava map is facing.</small>
+          </span>
+        </label>
+
+        <label>
+          <input type="checkbox" name="openInBackground" />
+          <span>
+            Open in a background tab
+            <small>Keeps you on the route builder instead of switching tabs.</small>
+          </span>
+        </label>
+
+        <label>
+          <input type="checkbox" name="blockRightDragRotate" />
+          <span>
+            Stop right-drag from rotating the map
+            <small>
+              Strava rotates the map when you drag with the right button held, which
+              swallows the right-click before the menu can open. You can still rotate
+              with Ctrl held and the left button.
+            </small>
+          </span>
+        </label>
+
+        <label>
+          <input type="checkbox" name="forceContextMenu" />
+          <span>
+            Force the browser menu over maps
+            <small>
+              Strava's map suppresses the normal right-click menu, which would hide this
+              extension's items. Turn this off only if it interferes with Strava's own
+              right-click behaviour.
+            </small>
+          </span>
+        </label>
+      </fieldset>
+    </form>
+
+    <p id="status" role="status" aria-live="polite"></p>
+
+    <script src="options.js"></script>
+  </body>
+</html>

@@ -1,0 +1,5 @@
+node_modules
+package-lock.json
+
+# Downloaded on demand by the e2e test
+test/maplibre-gl-*.js
